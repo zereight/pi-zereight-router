@@ -83,11 +83,11 @@ function editedThisTurn(messages: readonly Message[]): boolean {
 const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
 
 function phaseFromProbabilities(probabilities: Record<string, number>): Phase {
-	return PHASE_ORDER.reduce((best, phase) => {
+	return PHASE_ORDER.reduce<Phase>((best, phase) => {
 		const score = probabilities[phase] ?? 0;
 		const bestScore = probabilities[best] ?? 0;
 		return score > bestScore ? phase : best;
-	}, "planning" as Phase);
+	}, "planning");
 }
 
 /** Phase for a new user message. Falls back to planning when Jev is unavailable or fails. */

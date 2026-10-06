@@ -16,6 +16,14 @@
 
 Status line example: `(router) plan-impl • medium → composer-2.5 • off` means the virtual model is `router/plan-impl`, you chose `medium`, and this request was routed to Composer (thinking shown as `off` when that model does not use your selected effort).
 
+**Footer timing (Pi ≤ 1.0.4):** Stock Pi only updates the `→ model` suffix after the assistant message finishes. For an immediate update when routing completes (right after Jev + `route()`), run once:
+
+```bash
+node scripts/apply-pi-routed-model-footer-patch.mjs
+```
+
+Re-run after upgrading `@earendil-works/pi-coding-agent`. Long-term this belongs in Pi core upstream.
+
 ## Install
 
 ```bash
