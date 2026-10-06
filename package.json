@@ -2,7 +2,7 @@
 	"name": "pi-zereight-router",
 	"version": "0.1.0",
 	"type": "module",
-	"description": "Pi virtual model router (cursor-only): Jev classifies each message into plan, research, explore, review, or implementation — Cursor Sonnet 5.5, Grok 4.6, Composer, and GLM Flash.",
+	"description": "Pi virtual model router (cursor-only): Jev classifies each message into plan, research, explore, review, or implementation — Cursor Sonnet 5.5, Grok 4.6, and Composer.",
 	"keywords": [
 		"pi-package",
 		"pi",

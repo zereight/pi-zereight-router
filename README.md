@@ -9,14 +9,14 @@
 | **planning** | Design, tradeoffs, planning without deep repo/web dive | `cursor/claude-sonnet-5-5@300k` | `medium` (fixed) |
 | **research** | Docs, specs, web evidence | `cursor/grok-4.6` | `high` (fixed) |
 | **explore** | Find code in this repo, trace flows | `cursor/composer-2.5` | Your virtual-model setting |
-| **review** | PR/diff/security review | `cursor/glm-5p3-flash` | `max` (fixed) |
+| **review** | PR/diff/security review | `cursor/grok-4.6` | `low` (fixed) |
 | **implementation** | Edit files, build, fix | `cursor/composer-2.5` | Your virtual-model setting |
 
 All backends use the **cursor** provider (pi-cursor-sdk). There is no claude-bridge hop.
 
-**Mid-turn handoff:** After the first successful file mutation (`edit` / `write` / Cursor `StrReplace`, etc.) in a **planning**, **research**, or **explore** turn, the rest of that turn uses **implementation** (Composer). **Review** stays on GLM until the next user message. Compaction and other `direct` routes go to Composer.
+**Mid-turn handoff:** After the first successful file mutation (`edit` / `write` / Cursor `StrReplace`, etc.) in a **planning**, **research**, or **explore** turn, the rest of that turn uses **implementation** (Composer). **Review** stays on Grok 4.6 low until the next user message. Compaction and other `direct` routes go to Composer.
 
-**Retry:** Failed requests retry on the **same physical model** (no accidental glm ↔ composer switch on `reason: retry`).
+**Retry:** Failed requests retry on the **same physical model** (no accidental review ↔ composer switch on `reason: retry`).
 
 **pi-cursor-sdk:** After router model switches, force a full Cursor bootstrap when `modelSelection` changes (avoids incremental prompts with the wrong tool manifest). Re-apply after SDK updates:
 
@@ -57,12 +57,12 @@ Or one session without adding to settings:
 pi -e git:github.com/zereight/pi-zereight-router
 ```
 
-After install: `/reload`, then `/model` → **Cursor router: Sonnet (plan) · Grok (research) · Composer · GLM (review)** (`router/cursor-router`).
+After install: `/reload`, then `/model` → **Cursor router: Sonnet (plan) · Grok (research) · Composer · Grok low (review)** (`router/cursor-router`).
 
 ## Requirements
 
 - **OpenRouter:** `OPENROUTER_API_KEY` (or OpenRouter login) so Jev (`openrouter/typesafe/jev-1.13`) can classify messages. If Jev is missing or fails, new messages default to **planning** (Cursor Sonnet 5.5 @300k).
-- **Models in your Pi catalog:** `cursor/claude-sonnet-5-5@300k`, `cursor/grok-4.6`, `cursor/composer-2.5`, `cursor/glm-5p3-flash` (via [pi-cursor-sdk](https://github.com/zereight/pi-cursor-sdk)).
+- **Models in your Pi catalog:** `cursor/claude-sonnet-5-5@300k`, `cursor/grok-4.6`, `cursor/composer-2.5` (via [pi-cursor-sdk](https://github.com/zereight/pi-cursor-sdk)).
 
 ## Usage
 

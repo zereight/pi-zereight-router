@@ -6,7 +6,7 @@
  * - Planning: cursor/claude-sonnet-5-5@300k at medium effort.
  * - Research (evidence / web): cursor/grok-4.6 at high effort.
  * - Codebase explore: cursor/composer-2.5.
- * - Review: cursor/glm-5p3-flash at max effort.
+ * - Review: cursor/grok-4.6 at low effort.
  * - Implementation: cursor/composer-2.5.
  *
  * Requires OPENROUTER_API_KEY (or an OpenRouter login) for Jev. Without Jev, new messages start in planning.
@@ -35,8 +35,8 @@ import {
 const CURSOR_PROVIDER = "cursor";
 const SONNET_MODEL = "claude-sonnet-5-5@300k";
 const SONNET_THINKING: ThinkingLevel = "medium";
-const REVIEW_MODEL = "glm-5p3-flash";
-const REVIEW_THINKING: ThinkingLevel = "max";
+const REVIEW_MODEL = "grok-4.6";
+const REVIEW_THINKING: ThinkingLevel = "low";
 const COMPOSER_MODEL = "composer-2.5";
 const GROK_MODEL = "grok-4.6";
 const GROK_THINKING: ThinkingLevel = "high";
@@ -44,7 +44,6 @@ const JEV_PROVIDER = "openrouter";
 const JEV_MODEL = "typesafe/jev-1.13";
 
 const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
-
 function routeTo(request: RoutePolicyRequest, ctx: ExtensionContext, phase: Phase, state?: RouterState): ModelRoute<RouterState> {
 	const config = (() => {
 		switch (phase) {
@@ -167,7 +166,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerVirtualModel<RouterState>({
 		provider: "router",
 		id: "cursor-router",
-		name: "Cursor router: Sonnet (plan) · Grok (research) · Composer · GLM (review)",
+		name: "Cursor router: Sonnet (plan) · Grok (research) · Composer · Grok low (review)",
 		thinkingLevels: ["low", "medium", "high", "max"],
 		async route(request, ctx) {
 			if (request.reason === "direct") return routeTo(request, ctx, "implementation");
