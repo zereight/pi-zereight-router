@@ -2,7 +2,7 @@
 	"name": "pi-zereight-router",
 	"version": "0.1.0",
 	"type": "module",
-	"description": "Pi virtual model router: Jev classifies each message into plan, research, explore, review, or implementation — Sonnet, Composer, and GLM Flash with fixed effort where it matters.",
+	"description": "Pi virtual model router (cursor-only): Jev classifies each message into plan, research, explore, review, or implementation — Cursor Sonnet 5.5, Composer, and GLM Flash.",
 	"keywords": [
 		"pi-package",
 		"pi",
@@ -27,7 +27,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./extensions/plan-impl-router.ts"
+			"./extensions/cursor-router.ts"
 		]
 	},
 	"peerDependencies": {
