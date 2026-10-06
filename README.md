@@ -7,7 +7,7 @@
 | Phase (Jev) | Typical ask | Model | Effort |
 | --- | --- | --- | --- |
 | **planning** | Design, tradeoffs, planning without deep repo/web dive | `cursor/claude-sonnet-5-5@300k` | `medium` (fixed) |
-| **research** | Docs, specs, web evidence | `cursor/claude-sonnet-5-5@300k` | `medium` (fixed) |
+| **research** | Docs, specs, web evidence | `cursor/grok-4.6` | `high` (fixed) |
 | **explore** | Find code in this repo, trace flows | `cursor/composer-2.5` | Your virtual-model setting |
 | **review** | PR/diff/security review | `cursor/glm-5p3-flash` | `max` (fixed) |
 | **implementation** | Edit files, build, fix | `cursor/composer-2.5` | Your virtual-model setting |
@@ -57,12 +57,12 @@ Or one session without adding to settings:
 pi -e git:github.com/zereight/pi-zereight-router
 ```
 
-After install: `/reload`, then `/model` → **Cursor router: Sonnet 5.5 (plan/research) · Composer · GLM (review)** (`router/cursor-router`).
+After install: `/reload`, then `/model` → **Cursor router: Sonnet (plan) · Grok (research) · Composer · GLM (review)** (`router/cursor-router`).
 
 ## Requirements
 
 - **OpenRouter:** `OPENROUTER_API_KEY` (or OpenRouter login) so Jev (`openrouter/typesafe/jev-1.13`) can classify messages. If Jev is missing or fails, new messages default to **planning** (Cursor Sonnet 5.5 @300k).
-- **Models in your Pi catalog:** `cursor/claude-sonnet-5-5@300k`, `cursor/composer-2.5`, `cursor/glm-5p3-flash` (via [pi-cursor-sdk](https://github.com/zereight/pi-cursor-sdk)).
+- **Models in your Pi catalog:** `cursor/claude-sonnet-5-5@300k`, `cursor/grok-4.6`, `cursor/composer-2.5`, `cursor/glm-5p3-flash` (via [pi-cursor-sdk](https://github.com/zereight/pi-cursor-sdk)).
 
 ## Usage
 

@@ -4,7 +4,7 @@
  * Registers `router/cursor-router`:
  *
  * - Planning: cursor/claude-sonnet-5-5@300k at medium effort.
- * - Research (evidence / web): cursor/claude-sonnet-5-5@300k at medium effort.
+ * - Research (evidence / web): cursor/grok-4.6 at high effort.
  * - Codebase explore: cursor/composer-2.5.
  * - Review: cursor/glm-5p3-flash at max effort.
  * - Implementation: cursor/composer-2.5.
@@ -38,6 +38,8 @@ const SONNET_THINKING: ThinkingLevel = "medium";
 const REVIEW_MODEL = "glm-5p3-flash";
 const REVIEW_THINKING: ThinkingLevel = "max";
 const COMPOSER_MODEL = "composer-2.5";
+const GROK_MODEL = "grok-4.6";
+const GROK_THINKING: ThinkingLevel = "high";
 const JEV_PROVIDER = "openrouter";
 const JEV_MODEL = "typesafe/jev-1.13";
 
@@ -47,8 +49,9 @@ function routeTo(request: RoutePolicyRequest, ctx: ExtensionContext, phase: Phas
 	const config = (() => {
 		switch (phase) {
 			case "planning":
-			case "research":
 				return { provider: CURSOR_PROVIDER, id: SONNET_MODEL, thinkingLevel: SONNET_THINKING };
+			case "research":
+				return { provider: CURSOR_PROVIDER, id: GROK_MODEL, thinkingLevel: GROK_THINKING };
 			case "explore":
 			case "implementation":
 				return { provider: CURSOR_PROVIDER, id: COMPOSER_MODEL, thinkingLevel: request.thinkingLevel };
@@ -118,6 +121,7 @@ function phaseForFailedRetry(request: RoutePolicyRequest): Phase | undefined {
 	if (failed.id === COMPOSER_MODEL) return "implementation";
 	if (failed.id === REVIEW_MODEL) return "review";
 	if (failed.id === SONNET_MODEL) return request.state?.phase ?? "planning";
+	if (failed.id === GROK_MODEL) return request.state?.phase ?? "research";
 	return undefined;
 }
 
@@ -163,7 +167,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerVirtualModel<RouterState>({
 		provider: "router",
 		id: "cursor-router",
-		name: "Cursor router: Sonnet 5.5 (plan/research) · Composer · GLM (review)",
+		name: "Cursor router: Sonnet (plan) · Grok (research) · Composer · GLM (review)",
 		thinkingLevels: ["low", "medium", "high", "max"],
 		async route(request, ctx) {
 			if (request.reason === "direct") return routeTo(request, ctx, "implementation");
