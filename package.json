@@ -1,0 +1,38 @@
+{
+	"name": "pi-zereight-router",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Pi virtual model router: Jev classifies each message into plan, research, explore, review, or implementation — Sonnet, Composer, and GLM Flash with fixed effort where it matters.",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"coding-agent",
+		"router",
+		"jev",
+		"virtual-model"
+	],
+	"license": "MIT",
+	"author": {
+		"name": "zereight",
+		"url": "https://github.com/zereight"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/zereight/pi-zereight-router.git"
+	},
+	"files": [
+		"extensions",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/plan-impl-router.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
