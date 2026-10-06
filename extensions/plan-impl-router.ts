@@ -20,6 +20,8 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 
@@ -128,7 +130,33 @@ async function classifyPhase(request: Request, ctx: ExtensionContext): Promise<P
 	}
 }
 
+/** Marker that apply-pi-routed-model-footer-patch.mjs leaves in Pi's bundled session code. */
+const FOOTER_PATCH_MARKER = "_dispatchedRoute";
+
+/** Whether the running Pi bundle has the footer patch. Undefined when the bundle cannot be inspected. */
+function isFooterPatched(): boolean | undefined {
+	try {
+		const chunksDir = join(dirname(realpathSync(process.argv[1] ?? "")), "chunks");
+		const sources = readdirSync(chunksDir)
+			.filter((name) => name.endsWith(".js"))
+			.map((name) => readFileSync(join(chunksDir, name), "utf8"))
+			.filter((source) => source.includes("get routedModel"));
+		if (sources.length === 0) return undefined;
+		return sources.some((source) => source.includes(FOOTER_PATCH_MARKER));
+	} catch {
+		return undefined;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", (_event, ctx) => {
+		if (!ctx.hasUI || isFooterPatched() !== false) return;
+		ctx.ui.notify(
+			"pi-zereight-router: Pi footer patch is missing (likely reverted by a Pi update). " +
+				"Run: node ~/Documents/pi-zereight-router/scripts/apply-pi-routed-model-footer-patch.mjs",
+			"warning",
+		);
+	});
 	pi.registerVirtualModel<RouterState>({
 		provider: "router",
 		id: "plan-impl",
