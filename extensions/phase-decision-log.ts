@@ -20,6 +20,7 @@ export interface PhaseDecisionRecord {
 /** Lives under the user's Pi dir, never inside this repo, so the log cannot be committed by accident. */
 const LOG_DIR = join(homedir(), ".pi", "agent", "router-logs");
 const LOG_FILE = join(LOG_DIR, "phase-decisions.jsonl");
+const RECOVERY_LOG_FILE = join(LOG_DIR, "recovery-decisions.jsonl");
 const MESSAGE_PREVIEW_CHARS = 160;
 
 /** Appends one JSON line per phase decision. Logging must never break routing, so failures are swallowed. */
@@ -35,6 +36,32 @@ export function logPhaseDecision(record: PhaseDecisionRecord): void {
 		});
 		appendFileSync(LOG_FILE, line + "\n", { mode: 0o600 });
 		chmodSync(LOG_FILE, 0o600);
+	} catch {
+		// Best-effort telemetry.
+	}
+}
+
+export interface RecoveryDecisionRecord {
+	contract: string;
+	jevModel: string;
+	profile: string;
+	action: string;
+	fallback: string;
+	retryCount: number;
+	confidence?: number;
+	probabilities?: Record<string, number>;
+	failedModel?: string;
+	errorMessage: string;
+}
+
+/** Same rules as logPhaseDecision: local, owner-only, best-effort. */
+export function logRecoveryDecision(record: RecoveryDecisionRecord): void {
+	try {
+		mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+		const { errorMessage, ...rest } = record;
+		const line = JSON.stringify({ ts: new Date().toISOString(), ...rest, errorPreview: errorMessage.slice(0, MESSAGE_PREVIEW_CHARS) });
+		appendFileSync(RECOVERY_LOG_FILE, line + "\n", { mode: 0o600 });
+		chmodSync(RECOVERY_LOG_FILE, 0o600);
 	} catch {
 		// Best-effort telemetry.
 	}

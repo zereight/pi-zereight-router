@@ -79,3 +79,7 @@ MIT
 ## Phase decision log (local only)
 
 Every new-message classification appends one JSON line to `~/.pi/agent/router-logs/phase-decisions.jsonl` (dir `0700`, file `0600`). The file lives outside this repo, and `router-logs/` and `*.jsonl` are git-ignored. Each line records the contract version (`phase@N`), Jev model, confidence, full probability distribution, fallback reason (`none`, `no_jev`, `error`, `low_confidence`, `other`), the phase before and after the regex boost, and the first 160 characters of the message. Bump `PHASE_CONTRACT_VERSION` in `extensions/cursor-router.ts` whenever the question, options, confidence floor, fallback or boost changes.
+
+## Recovery path (automatic retries)
+
+On a `retry` request the router asks Jev (`recover@1`) whether the failed error text means `retry_same` (overloaded, rate limit, timeout) or `switch_model` (context overflow, unsupported input). Low confidence, `other`, a missing Jev or an error all mean `retry_same`. After `MAX_SAME_MODEL_RETRIES` (2) consecutive retries the code forces a switch to the first phase target on a different model, whatever Jev says. A route must return a model, so "stop and ask" is not offered. Decisions are logged to `~/.pi/agent/router-logs/recovery-decisions.jsonl` (same permissions and git-ignore rules as the phase log).

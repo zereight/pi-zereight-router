@@ -35,7 +35,7 @@ import {
 	type RouterState,
 	shouldHandOffToImplementation,
 } from "./route-policy.ts";
-import { logPhaseDecision, type PhaseFallback } from "./phase-decision-log.ts";
+import { logPhaseDecision, logRecoveryDecision, type PhaseFallback } from "./phase-decision-log.ts";
 
 const CURSOR_PROVIDER = "cursor";
 const CLAUDE_BRIDGE_PROVIDER = "claude-bridge";
@@ -55,6 +55,18 @@ const MIN_PHASE_CONFIDENCE = 0.5;
 const PHASE_CONTRACT_VERSION = "phase@2";
 /** Escape hatch option: requests that fit none of the phases. Routed like the planning fallback, but logged. */
 const OTHER_CHOICE = "other";
+/** Version of the recovery contract: question text, options, confidence floor, retry limit and defaults. */
+const RECOVERY_CONTRACT_VERSION = "recover@1";
+/** Below this confidence the recovery answer is ignored and the failed model is retried. */
+const MIN_RECOVERY_CONFIDENCE = 0.5;
+/** Retries on the failed model before the code forces a switch, whatever Jev says. */
+const MAX_SAME_MODEL_RETRIES = 2;
+const ERROR_TEXT_LIMIT = 2_000;
+
+type RecoveryAction = "retry_same" | "switch_model";
+
+/** Consecutive automatic retries since the last non-retry request. Kept in code so the loop stays bounded. */
+let consecutiveRetries = 0;
 
 const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
 
@@ -199,6 +211,83 @@ async function classifyPhase(
 	return { phase: finalPhase, confidence };
 }
 
+/** Jev reads the failed request's error and picks between retrying the same model and switching. Code owns the retry limit. */
+async function chooseRecovery(
+	profile: RouterProfile,
+	request: RoutePolicyRequest,
+	ctx: ExtensionContext,
+): Promise<RecoveryAction> {
+	const errorText = (request.failed?.message.errorMessage ?? "").slice(0, ERROR_TEXT_LIMIT);
+	let action: RecoveryAction = "retry_same";
+	let fallback = "none";
+	let confidence: number | undefined;
+	let probabilities: Record<string, number> | undefined;
+	const jev = ctx.modelRegistry.findOfType("classifier", JEV_PROVIDER, JEV_MODEL);
+	if (consecutiveRetries > MAX_SAME_MODEL_RETRIES) {
+		action = "switch_model";
+		fallback = "retry_limit";
+	} else if (!jev) {
+		fallback = "no_jev";
+	} else if (!errorText) {
+		fallback = "no_error_text";
+	} else {
+		try {
+			const result = await ctx.modelRegistry.classify(
+				jev,
+				{
+					state: { error: errorText },
+					questions: {
+						recover: {
+							type: "choice",
+							instructions: "A model request failed with \`error\`. What should the next attempt do?",
+							criteria: {
+								retry_same:
+									"A transient provider problem that a plain retry can fix: overloaded, rate limited, timeout, dropped connection, 5xx",
+								switch_model:
+									"A problem tied to this specific model that a retry will repeat: context window exceeded, unsupported input, model not found or not allowed",
+								[OTHER_CHOICE]: "The error text does not say which of the two applies",
+							},
+						},
+					},
+				},
+				{ signal: request.signal },
+			);
+			const answer = result.stopReason === "stop" ? result.answers.recover : undefined;
+			if (answer?.type === "choice") {
+				confidence = answer.confidence;
+				probabilities = answer.probabilities;
+				if (answer.confidence < MIN_RECOVERY_CONFIDENCE) fallback = "low_confidence";
+				else if ((answer.probabilities.switch_model ?? 0) > (answer.probabilities.retry_same ?? 0)
+					&& (answer.probabilities.switch_model ?? 0) > (answer.probabilities[OTHER_CHOICE] ?? 0)) action = "switch_model";
+			} else {
+				fallback = "error";
+			}
+		} catch {
+			fallback = "error";
+		}
+	}
+	logRecoveryDecision({
+		contract: RECOVERY_CONTRACT_VERSION,
+		jevModel: `${JEV_PROVIDER}/${JEV_MODEL}`,
+		profile: profile.id,
+		action,
+		fallback,
+		retryCount: consecutiveRetries,
+		confidence,
+		probabilities,
+		failedModel: request.failed ? `${request.failed.model.provider}/${request.failed.model.id}` : undefined,
+		errorMessage: errorText,
+	});
+	return action;
+}
+
+/** First phase whose target is a different physical model than the one that failed. */
+function phaseForAlternateModel(profile: RouterProfile, request: RoutePolicyRequest): Phase | undefined {
+	const failed = request.failed?.model;
+	if (!failed) return undefined;
+	return PHASE_ORDER.find((phase) => !isSameModel(profile.targets[phase], failed));
+}
+
 function isSameModel(target: PhaseTarget, failed: { provider: string; id: string }): boolean {
 	return target.provider === failed.provider && target.id === failed.id;
 }
@@ -261,10 +350,16 @@ function registerProfile(pi: ExtensionAPI, profile: RouterProfile) {
 		name: profile.name,
 		thinkingLevels: ["low", "medium", "high", "max"],
 		async route(request, ctx) {
+			if (request.reason !== "retry") consecutiveRetries = 0;
 			if (request.reason === "direct") return routeTo(profile, request, ctx, "implementation");
 
 			if (request.reason === "retry") {
-				const retryPhase = phaseForFailedRetry(profile, request);
+				consecutiveRetries += 1;
+				const action = await chooseRecovery(profile, request, ctx);
+				const retryPhase =
+					action === "switch_model"
+						? (phaseForAlternateModel(profile, request) ?? phaseForFailedRetry(profile, request))
+						: phaseForFailedRetry(profile, request);
 				if (retryPhase) return routeTo(profile, request, ctx, retryPhase, request.state);
 			}
 
