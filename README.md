@@ -68,6 +68,8 @@ After install: `/reload`, then `/model` → **Cursor router: Sonnet (plan) · Gr
 
 ```bash
 pi --model router/cursor-router
+# or Claude only (claude-bridge): Opus plan/research/review, Sonnet explore/implement
+pi --model router/claude-router
 ```
 
 ## License

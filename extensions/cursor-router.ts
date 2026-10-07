@@ -1,7 +1,7 @@
 /**
- * Multi-phase router — virtual model with per-task routing (cursor provider only).
+ * Multi-phase router — virtual models with per-task routing.
  *
- * Registers `router/cursor-router`:
+ * Registers `router/cursor-router` (cursor provider) and `router/claude-router` (claude-bridge provider):
  *
  * - Planning: cursor/claude-sonnet-5-5@300k at medium effort.
  * - Research (evidence / web): cursor/grok-4.6 at high effort.
@@ -9,8 +9,12 @@
  * - Review: cursor/grok-4.6 at low effort.
  * - Implementation: cursor/composer-2.5.
  *
+ * claude-router only swaps Opus / Sonnet and the effort level:
+ * planning = Opus medium, research = Opus high, explore = Sonnet low,
+ * review = Opus low, implementation = Sonnet (user effort).
+ *
  * Requires OPENROUTER_API_KEY (or an OpenRouter login) for Jev. Without Jev, new messages start in planning.
- * Usage: pi --model router/cursor-router
+ * Usage: pi --model router/cursor-router | pi --model router/claude-router
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -33,44 +37,76 @@ import {
 } from "./route-policy.ts";
 
 const CURSOR_PROVIDER = "cursor";
+const CLAUDE_BRIDGE_PROVIDER = "claude-bridge";
 const SONNET_MODEL = "claude-sonnet-5-5@300k";
-const SONNET_THINKING: ThinkingLevel = "medium";
-const REVIEW_MODEL = "grok-4.6";
-const REVIEW_THINKING: ThinkingLevel = "low";
 const COMPOSER_MODEL = "composer-2.5";
 const GROK_MODEL = "grok-4.6";
-const GROK_THINKING: ThinkingLevel = "high";
+const CLAUDE_OPUS_MODEL = "claude-opus-5-5";
+const CLAUDE_SONNET_MODEL = "claude-sonnet-5-5";
 const JEV_PROVIDER = "openrouter";
 const JEV_MODEL = "typesafe/jev-1.13";
 /** Below this Jev confidence (0..1) the phase stays at the planning fallback. Read-only routing, so the floor is 0.5. */
 const MIN_PHASE_CONFIDENCE = 0.5;
 
 const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
+
+/** `thinkingLevel` undefined means "use the effort the user selected". */
+interface PhaseTarget {
+	provider: string;
+	id: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+interface RouterProfile {
+	id: string;
+	name: string;
+	targets: Record<Phase, PhaseTarget>;
+}
+
+const CURSOR_PROFILE: RouterProfile = {
+	id: "cursor-router",
+	name: "Cursor router: Sonnet (plan) · Grok (research) · Composer · Grok low (review)",
+	targets: {
+		planning: { provider: CURSOR_PROVIDER, id: SONNET_MODEL, thinkingLevel: "medium" },
+		research: { provider: CURSOR_PROVIDER, id: GROK_MODEL, thinkingLevel: "high" },
+		explore: { provider: CURSOR_PROVIDER, id: COMPOSER_MODEL },
+		review: { provider: CURSOR_PROVIDER, id: GROK_MODEL, thinkingLevel: "low" },
+		implementation: { provider: CURSOR_PROVIDER, id: COMPOSER_MODEL },
+	},
+};
+
+const CLAUDE_PROFILE: RouterProfile = {
+	id: "claude-router",
+	name: "Claude router: Opus (plan · research · review) · Sonnet (explore · implement)",
+	targets: {
+		planning: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_OPUS_MODEL, thinkingLevel: "medium" },
+		research: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_OPUS_MODEL, thinkingLevel: "high" },
+		explore: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_SONNET_MODEL, thinkingLevel: "low" },
+		review: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_OPUS_MODEL, thinkingLevel: "low" },
+		implementation: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_SONNET_MODEL },
+	},
+};
+
+const PROFILES: RouterProfile[] = [CURSOR_PROFILE, CLAUDE_PROFILE];
+
 function routeTo(
+	profile: RouterProfile,
 	request: RoutePolicyRequest,
 	ctx: ExtensionContext,
 	phase: Phase,
 	state?: RouterState,
 	confidence?: number,
 ): ModelRoute<RouterState> {
-	const config = (() => {
-		switch (phase) {
-			case "planning":
-				return { provider: CURSOR_PROVIDER, id: SONNET_MODEL, thinkingLevel: SONNET_THINKING };
-			case "research":
-				return { provider: CURSOR_PROVIDER, id: GROK_MODEL, thinkingLevel: GROK_THINKING };
-			case "explore":
-			case "implementation":
-				return { provider: CURSOR_PROVIDER, id: COMPOSER_MODEL, thinkingLevel: request.thinkingLevel };
-			case "review":
-				return { provider: CURSOR_PROVIDER, id: REVIEW_MODEL, thinkingLevel: REVIEW_THINKING };
-		}
-	})();
-	const model = ctx.modelRegistry.find(config.provider, config.id);
-	if (!model) throw new Error(`Model ${config.provider}/${config.id} is not in the catalog`);
+	const target = profile.targets[phase];
+	const model = ctx.modelRegistry.find(target.provider, target.id);
+	if (!model) throw new Error(`Model ${target.provider}/${target.id} is not in the catalog`);
 	noteRouteDispatch(ctx, phase, model.provider, model.id, confidence);
 	const nextState: RouterState = state ?? { phase };
-	return { model, thinkingLevel: config.thinkingLevel, state: { ...nextState, phase } };
+	return {
+		model,
+		thinkingLevel: target.thinkingLevel ?? request.thinkingLevel,
+		state: { ...nextState, phase },
+	};
 }
 
 function phaseFromProbabilities(probabilities: Record<string, number>): Phase {
@@ -129,14 +165,17 @@ async function classifyPhase(
 	return { phase: boostPhaseForCodebaseSignals(phase, userText), confidence };
 }
 
-function phaseForFailedRetry(request: RoutePolicyRequest): Phase | undefined {
+function isSameModel(target: PhaseTarget, failed: { provider: string; id: string }): boolean {
+	return target.provider === failed.provider && target.id === failed.id;
+}
+
+/** Phase whose target is the model that just failed, so the retry stays on the same physical model. */
+function phaseForFailedRetry(profile: RouterProfile, request: RoutePolicyRequest): Phase | undefined {
 	const failed = request.failed?.model;
-	if (!failed || failed.provider !== CURSOR_PROVIDER) return undefined;
-	if (failed.id === COMPOSER_MODEL) return "implementation";
-	if (failed.id === REVIEW_MODEL) return "review";
-	if (failed.id === SONNET_MODEL) return request.state?.phase ?? "planning";
-	if (failed.id === GROK_MODEL) return request.state?.phase ?? "research";
-	return undefined;
+	if (!failed) return undefined;
+	const currentPhase = request.state?.phase;
+	if (currentPhase && isSameModel(profile.targets[currentPhase], failed)) return currentPhase;
+	return PHASE_ORDER.find((phase) => isSameModel(profile.targets[phase], failed));
 }
 
 /** Marker that apply-pi-routed-model-footer-patch.mjs leaves in Pi's bundled session code. */
@@ -178,31 +217,35 @@ export default function (pi: ExtensionAPI) {
 			console.log(report);
 		},
 	});
+	for (const profile of PROFILES) registerProfile(pi, profile);
+}
+
+function registerProfile(pi: ExtensionAPI, profile: RouterProfile) {
 	pi.registerVirtualModel<RouterState>({
 		provider: "router",
-		id: "cursor-router",
-		name: "Cursor router: Sonnet (plan) · Grok (research) · Composer · Grok low (review)",
+		id: profile.id,
+		name: profile.name,
 		thinkingLevels: ["low", "medium", "high", "max"],
 		async route(request, ctx) {
-			if (request.reason === "direct") return routeTo(request, ctx, "implementation");
+			if (request.reason === "direct") return routeTo(profile, request, ctx, "implementation");
 
 			if (request.reason === "retry") {
-				const retryPhase = phaseForFailedRetry(request);
-				if (retryPhase) return routeTo(request, ctx, retryPhase, request.state);
+				const retryPhase = phaseForFailedRetry(profile, request);
+				if (retryPhase) return routeTo(profile, request, ctx, retryPhase, request.state);
 			}
 
 			if (request.reason === "user" || !request.state) {
 				const { phase, confidence } = await classifyPhase(request, ctx);
-				return routeTo(request, ctx, phase, undefined, confidence);
+				return routeTo(profile, request, ctx, phase, undefined, confidence);
 			}
 
 			const state = request.state;
 
 			if (shouldHandOffToImplementation(state, request.messages)) {
-				return routeTo(request, ctx, "implementation", { phase: "implementation" });
+				return routeTo(profile, request, ctx, "implementation", { phase: "implementation" });
 			}
 
-			return routeTo(request, ctx, state.phase, state);
+			return routeTo(profile, request, ctx, state.phase, state);
 		},
 	});
 }
