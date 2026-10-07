@@ -42,9 +42,17 @@ const GROK_MODEL = "grok-4.6";
 const GROK_THINKING: ThinkingLevel = "high";
 const JEV_PROVIDER = "openrouter";
 const JEV_MODEL = "typesafe/jev-1.13";
+/** Below this Jev confidence (0..1) the phase stays at the planning fallback. Read-only routing, so the floor is 0.5. */
+const MIN_PHASE_CONFIDENCE = 0.5;
 
 const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
-function routeTo(request: RoutePolicyRequest, ctx: ExtensionContext, phase: Phase, state?: RouterState): ModelRoute<RouterState> {
+function routeTo(
+	request: RoutePolicyRequest,
+	ctx: ExtensionContext,
+	phase: Phase,
+	state?: RouterState,
+	confidence?: number,
+): ModelRoute<RouterState> {
 	const config = (() => {
 		switch (phase) {
 			case "planning":
@@ -60,7 +68,7 @@ function routeTo(request: RoutePolicyRequest, ctx: ExtensionContext, phase: Phas
 	})();
 	const model = ctx.modelRegistry.find(config.provider, config.id);
 	if (!model) throw new Error(`Model ${config.provider}/${config.id} is not in the catalog`);
-	noteRouteDispatch(ctx, phase, model.provider, model.id);
+	noteRouteDispatch(ctx, phase, model.provider, model.id, confidence);
 	const nextState: RouterState = state ?? { phase };
 	return { model, thinkingLevel: config.thinkingLevel, state: { ...nextState, phase } };
 }
@@ -74,9 +82,13 @@ function phaseFromProbabilities(probabilities: Record<string, number>): Phase {
 }
 
 /** Phase for a new user message. Falls back to planning when Jev is unavailable or fails. */
-async function classifyPhase(request: RoutePolicyRequest, ctx: ExtensionContext): Promise<Phase> {
+async function classifyPhase(
+	request: RoutePolicyRequest,
+	ctx: ExtensionContext,
+): Promise<{ phase: Phase; confidence?: number }> {
 	const jev = ctx.modelRegistry.findOfType("classifier", JEV_PROVIDER, JEV_MODEL);
 	let phase: Phase = "planning";
+	let confidence: number | undefined;
 	if (jev) {
 		try {
 			const result = await ctx.modelRegistry.classify(
@@ -105,13 +117,16 @@ async function classifyPhase(request: RoutePolicyRequest, ctx: ExtensionContext)
 				{ signal: request.signal },
 			);
 			const answer = result.stopReason === "stop" ? result.answers.phase : undefined;
-			if (answer?.type === "choice") phase = phaseFromProbabilities(answer.probabilities);
+			if (answer?.type === "choice") confidence = answer.confidence;
+			if (answer?.type === "choice" && answer.confidence >= MIN_PHASE_CONFIDENCE) {
+				phase = phaseFromProbabilities(answer.probabilities);
+			}
 		} catch {
 			phase = "planning";
 		}
 	}
 	const userText = lastUserText(request.messages);
-	return boostPhaseForCodebaseSignals(phase, userText);
+	return { phase: boostPhaseForCodebaseSignals(phase, userText), confidence };
 }
 
 function phaseForFailedRetry(request: RoutePolicyRequest): Phase | undefined {
@@ -177,7 +192,8 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (request.reason === "user" || !request.state) {
-				return routeTo(request, ctx, await classifyPhase(request, ctx));
+				const { phase, confidence } = await classifyPhase(request, ctx);
+				return routeTo(request, ctx, phase, undefined, confidence);
 			}
 
 			const state = request.state;

@@ -85,6 +85,7 @@ export function noteRouteDispatch(
 	phase: string,
 	provider: string,
 	modelId: string,
+	confidence?: number,
 ): void {
 	const toKey = modelRouteKey(provider, modelId);
 	const previousTurnHitRate =
@@ -111,6 +112,10 @@ export function noteRouteDispatch(
 		}
 	} else {
 		pendingTransition = null;
+	}
+
+	if (confidence !== undefined && ctx.hasUI) {
+		ctx.ui.notify(`[router] phase=${phase} jev confidence ${confidence.toFixed(2)}`, "info");
 	}
 
 	lastDispatchedKey = toKey;
