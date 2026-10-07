@@ -35,6 +35,7 @@ import {
 	type RouterState,
 	shouldHandOffToImplementation,
 } from "./route-policy.ts";
+import { logPhaseDecision, type PhaseFallback } from "./phase-decision-log.ts";
 
 const CURSOR_PROVIDER = "cursor";
 const CLAUDE_BRIDGE_PROVIDER = "claude-bridge";
@@ -47,6 +48,13 @@ const JEV_PROVIDER = "openrouter";
 const JEV_MODEL = "typesafe/jev-1.13";
 /** Below this Jev confidence (0..1) the phase stays at the planning fallback. Read-only routing, so the floor is 0.5. */
 const MIN_PHASE_CONFIDENCE = 0.5;
+/**
+ * Version of the phase decision contract: question text, option descriptions, state shape, confidence floor,
+ * fallback and the regex boost. Bump it whenever one of them changes, so logged decisions stay comparable.
+ */
+const PHASE_CONTRACT_VERSION = "phase@2";
+/** Escape hatch option: requests that fit none of the phases. Routed like the planning fallback, but logged. */
+const OTHER_CHOICE = "other";
 
 const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
 
@@ -109,28 +117,32 @@ function routeTo(
 	};
 }
 
-function phaseFromProbabilities(probabilities: Record<string, number>): Phase {
-	return PHASE_ORDER.reduce<Phase>((best, phase) => {
-		const score = probabilities[phase] ?? 0;
+function phaseFromProbabilities(probabilities: Record<string, number>): Phase | typeof OTHER_CHOICE {
+	return [...PHASE_ORDER, OTHER_CHOICE].reduce<Phase | typeof OTHER_CHOICE>((best, choice) => {
+		const score = probabilities[choice] ?? 0;
 		const bestScore = probabilities[best] ?? 0;
-		return score > bestScore ? phase : best;
+		return score > bestScore ? choice : best;
 	}, "planning");
 }
 
-/** Phase for a new user message. Falls back to planning when Jev is unavailable or fails. */
+/** Phase for a new user message. Falls back to planning when Jev is unavailable, fails, is unsure, or answers "other". */
 async function classifyPhase(
+	profile: RouterProfile,
 	request: RoutePolicyRequest,
 	ctx: ExtensionContext,
 ): Promise<{ phase: Phase; confidence?: number }> {
+	const userText = lastUserText(request.messages);
 	const jev = ctx.modelRegistry.findOfType("classifier", JEV_PROVIDER, JEV_MODEL);
 	let phase: Phase = "planning";
 	let confidence: number | undefined;
+	let probabilities: Record<string, number> | undefined;
+	let fallback: PhaseFallback = jev ? "none" : "no_jev";
 	if (jev) {
 		try {
 			const result = await ctx.modelRegistry.classify(
 				jev,
 				{
-					state: { message: lastUserText(request.messages).slice(0, 16_000) },
+					state: { message: userText.slice(0, 16_000) },
 					questions: {
 						phase: {
 							type: "choice",
@@ -146,6 +158,8 @@ async function classifyPhase(
 									"Code review, PR/diff review, security review, or critiquing existing code without implementing the fix",
 								implementation:
 									"Carrying out a clear, concrete change: writing code, editing files, or running a defined build/fix task",
+								[OTHER_CHOICE]:
+									"None of the above: a short conceptual question, an opinion on a pasted article, small talk, or a git/shell chore that needs no code design",
 							},
 						},
 					},
@@ -153,16 +167,36 @@ async function classifyPhase(
 				{ signal: request.signal },
 			);
 			const answer = result.stopReason === "stop" ? result.answers.phase : undefined;
-			if (answer?.type === "choice") confidence = answer.confidence;
-			if (answer?.type === "choice" && answer.confidence >= MIN_PHASE_CONFIDENCE) {
-				phase = phaseFromProbabilities(answer.probabilities);
+			if (answer?.type === "choice") {
+				confidence = answer.confidence;
+				probabilities = answer.probabilities;
+				if (answer.confidence < MIN_PHASE_CONFIDENCE) {
+					fallback = "low_confidence";
+				} else {
+					const picked = phaseFromProbabilities(answer.probabilities);
+					if (picked === OTHER_CHOICE) fallback = "other";
+					else phase = picked;
+				}
+			} else {
+				fallback = "error";
 			}
 		} catch {
-			phase = "planning";
+			fallback = "error";
 		}
 	}
-	const userText = lastUserText(request.messages);
-	return { phase: boostPhaseForCodebaseSignals(phase, userText), confidence };
+	const finalPhase = boostPhaseForCodebaseSignals(phase, userText);
+	logPhaseDecision({
+		contract: PHASE_CONTRACT_VERSION,
+		jevModel: `${JEV_PROVIDER}/${JEV_MODEL}`,
+		profile: profile.id,
+		fallback,
+		confidence,
+		probabilities,
+		phaseBeforeBoost: phase,
+		phase: finalPhase,
+		message: userText,
+	});
+	return { phase: finalPhase, confidence };
 }
 
 function isSameModel(target: PhaseTarget, failed: { provider: string; id: string }): boolean {
@@ -235,7 +269,7 @@ function registerProfile(pi: ExtensionAPI, profile: RouterProfile) {
 			}
 
 			if (request.reason === "user" || !request.state) {
-				const { phase, confidence } = await classifyPhase(request, ctx);
+				const { phase, confidence } = await classifyPhase(profile, request, ctx);
 				return routeTo(profile, request, ctx, phase, undefined, confidence);
 			}
 

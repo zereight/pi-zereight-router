@@ -75,3 +75,7 @@ pi --model router/claude-router
 ## License
 
 MIT
+
+## Phase decision log (local only)
+
+Every new-message classification appends one JSON line to `~/.pi/agent/router-logs/phase-decisions.jsonl` (dir `0700`, file `0600`). The file lives outside this repo, and `router-logs/` and `*.jsonl` are git-ignored. Each line records the contract version (`phase@N`), Jev model, confidence, full probability distribution, fallback reason (`none`, `no_jev`, `error`, `low_confidence`, `other`), the phase before and after the regex boost, and the first 160 characters of the message. Bump `PHASE_CONTRACT_VERSION` in `extensions/cursor-router.ts` whenever the question, options, confidence floor, fallback or boost changes.
