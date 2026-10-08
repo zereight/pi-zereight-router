@@ -4,7 +4,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 
-export type Phase = "planning" | "research" | "explore" | "review" | "implementation";
+export type Phase = "planning" | "research" | "explore" | "review" | "implementation" | "other";
 
 export interface RouterState {
 	phase: Phase;
@@ -22,7 +22,7 @@ const MUTATION_TOOL_NAMES = new Set([
 	"write_file",
 ]);
 
-const EDIT_HANDOFF_PHASES = new Set<Phase>(["planning", "research", "explore"]);
+const EDIT_HANDOFF_PHASES = new Set<Phase>(["planning", "research", "explore", "other"]);
 
 const CODEBASE_EXPLORE_PATTERN =
 	/\b(codebase|repo(sitory)?|monorepo|grep|tgrep|trace|symbol|refactor|hold\s*code|qr[\s-]?tab|navigat|@features\/|packages\/|\.tsx\b|\.ts\b|git\s+diff|diff\b|implement|수정|추적|코드베이스|리포|파일)\b/i;

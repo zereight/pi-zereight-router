@@ -5,13 +5,14 @@
  *
  * - Planning: cursor/claude-sonnet-5-5@300k at medium effort.
  * - Research (evidence / web): cursor/grok-4.6 at high effort.
- * - Codebase explore: cursor/composer-2.5.
+ * - Codebase explore: cursor/claude-haiku-5-5@300k at max effort.
+ * - Jev "other" (misc): cursor/claude-haiku-5-5@300k at max effort.
  * - Review: cursor/grok-4.6 at low effort.
  * - Implementation: cursor/composer-2.5.
  *
- * claude-router only swaps Opus / Sonnet and the effort level:
- * planning = Opus medium, research = Opus high, explore = Sonnet low,
- * review = Opus low, implementation = Sonnet (user effort).
+ * claude-router only swaps Opus / Sonnet / Haiku and the effort level:
+ * planning = Opus medium, research = Opus high, explore = Haiku max,
+ * other = Haiku max, review = Opus low, implementation = Sonnet (user effort).
  *
  * Requires OPENROUTER_API_KEY (or an OpenRouter login) for Jev. Without Jev, new messages start in planning.
  * Usage: pi --model router/cursor-router | pi --model router/claude-router
@@ -40,10 +41,13 @@ import { logPhaseDecision, logRecoveryDecision, type PhaseFallback } from "./pha
 const CURSOR_PROVIDER = "cursor";
 const CLAUDE_BRIDGE_PROVIDER = "claude-bridge";
 const SONNET_MODEL = "claude-sonnet-5-5@300k";
+const HAIKU_MODEL = "claude-haiku-5-5@300k";
 const COMPOSER_MODEL = "composer-2.5";
+const HAIKU_EFFORT: ThinkingLevel = "max";
 const GROK_MODEL = "grok-4.6";
 const CLAUDE_OPUS_MODEL = "claude-opus-5-5";
 const CLAUDE_SONNET_MODEL = "claude-sonnet-5-5";
+const CLAUDE_HAIKU_MODEL = "claude-haiku-5-5";
 const JEV_PROVIDER = "openrouter";
 const JEV_MODEL = "typesafe/jev-1.13";
 /** Below this Jev confidence (0..1) the phase stays at the planning fallback. Read-only routing, so the floor is 0.5. */
@@ -52,8 +56,8 @@ const MIN_PHASE_CONFIDENCE = 0.5;
  * Version of the phase decision contract: question text, option descriptions, state shape, confidence floor,
  * fallback and the regex boost. Bump it whenever one of them changes, so logged decisions stay comparable.
  */
-const PHASE_CONTRACT_VERSION = "phase@2";
-/** Escape hatch option: requests that fit none of the phases. Routed like the planning fallback, but logged. */
+const PHASE_CONTRACT_VERSION = "phase@3";
+/** Escape hatch option: requests that fit none of the phases. Routed to the other phase and logged. */
 const OTHER_CHOICE = "other";
 /** Version of the recovery contract: question text, options, confidence floor, retry limit and defaults. */
 const RECOVERY_CONTRACT_VERSION = "recover@1";
@@ -68,7 +72,7 @@ type RecoveryAction = "retry_same" | "switch_model";
 /** Consecutive automatic retries since the last non-retry request. Kept in code so the loop stays bounded. */
 let consecutiveRetries = 0;
 
-const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation"];
+const PHASE_ORDER: Phase[] = ["planning", "research", "explore", "review", "implementation", "other"];
 
 /** `thinkingLevel` undefined means "use the effort the user selected". */
 interface PhaseTarget {
@@ -85,11 +89,12 @@ interface RouterProfile {
 
 const CURSOR_PROFILE: RouterProfile = {
 	id: "cursor-router",
-	name: "Cursor router: Sonnet (plan) · Grok (research) · Composer · Grok low (review)",
+	name: "Cursor router: Sonnet (plan) · Grok (research) · Haiku max (explore/other) · Composer · Grok low (review)",
 	targets: {
 		planning: { provider: CURSOR_PROVIDER, id: SONNET_MODEL, thinkingLevel: "medium" },
 		research: { provider: CURSOR_PROVIDER, id: GROK_MODEL, thinkingLevel: "high" },
-		explore: { provider: CURSOR_PROVIDER, id: COMPOSER_MODEL },
+		explore: { provider: CURSOR_PROVIDER, id: HAIKU_MODEL, thinkingLevel: HAIKU_EFFORT },
+		other: { provider: CURSOR_PROVIDER, id: HAIKU_MODEL, thinkingLevel: HAIKU_EFFORT },
 		review: { provider: CURSOR_PROVIDER, id: GROK_MODEL, thinkingLevel: "low" },
 		implementation: { provider: CURSOR_PROVIDER, id: COMPOSER_MODEL },
 	},
@@ -97,11 +102,12 @@ const CURSOR_PROFILE: RouterProfile = {
 
 const CLAUDE_PROFILE: RouterProfile = {
 	id: "claude-router",
-	name: "Claude router: Opus (plan · research · review) · Sonnet (explore · implement)",
+	name: "Claude router: Opus (plan · research · review) · Haiku max (explore/other) · Sonnet (implement)",
 	targets: {
 		planning: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_OPUS_MODEL, thinkingLevel: "medium" },
 		research: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_OPUS_MODEL, thinkingLevel: "high" },
-		explore: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_SONNET_MODEL, thinkingLevel: "low" },
+		explore: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_HAIKU_MODEL, thinkingLevel: "max" },
+		other: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_HAIKU_MODEL, thinkingLevel: "max" },
 		review: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_OPUS_MODEL, thinkingLevel: "low" },
 		implementation: { provider: CLAUDE_BRIDGE_PROVIDER, id: CLAUDE_SONNET_MODEL },
 	},
@@ -129,15 +135,15 @@ function routeTo(
 	};
 }
 
-function phaseFromProbabilities(probabilities: Record<string, number>): Phase | typeof OTHER_CHOICE {
-	return [...PHASE_ORDER, OTHER_CHOICE].reduce<Phase | typeof OTHER_CHOICE>((best, choice) => {
+function phaseFromProbabilities(probabilities: Record<string, number>): Phase {
+	return PHASE_ORDER.reduce<Phase>((best, choice) => {
 		const score = probabilities[choice] ?? 0;
 		const bestScore = probabilities[best] ?? 0;
 		return score > bestScore ? choice : best;
 	}, "planning");
 }
 
-/** Phase for a new user message. Falls back to planning when Jev is unavailable, fails, is unsure, or answers "other". */
+/** Phase for a new user message. Falls back to planning when Jev is unavailable, fails, or is unsure. */
 async function classifyPhase(
 	profile: RouterProfile,
 	request: RoutePolicyRequest,
@@ -187,7 +193,7 @@ async function classifyPhase(
 				} else {
 					const picked = phaseFromProbabilities(answer.probabilities);
 					if (picked === OTHER_CHOICE) fallback = "other";
-					else phase = picked;
+					phase = picked;
 				}
 			} else {
 				fallback = "error";
